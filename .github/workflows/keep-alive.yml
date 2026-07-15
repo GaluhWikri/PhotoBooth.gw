@@ -1,0 +1,32 @@
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    # Run every 4 days at 00:00 UTC (Supabase pauses after 7 days of inactivity)
+    - cron: '0 0 */4 * *'
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase API
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_ANON_KEY }}" ]; then
+            echo "Error: SUPABASE_URL or SUPABASE_ANON_KEY secret is not set!"
+            exit 1
+          fi
+          
+          # Hitting the REST API and querying 1 item from the stickers table
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/stickers?select=name&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          
+          echo "Supabase API responded with status code: $STATUS_CODE"
+          
+          if [ "$STATUS_CODE" -ne 200 ] && [ "$STATUS_CODE" -ne 204 ] && [ "$STATUS_CODE" -ne 206 ]; then
+            echo "Ping failed!"
+            exit 1
+          fi
+          echo "Ping successful, Supabase project is kept alive!"
