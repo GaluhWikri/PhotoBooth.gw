@@ -282,10 +282,22 @@ const PhotoStrip = forwardRef<PhotoStripHandle, PhotoStripProps>(({ photos, layo
       ctx.textBaseline = 'middle';
       ctx.fillText(textElement.innerText, tx, ty);
 
-      // 7. UNDUH HASIL AKHIR
+      // 7. UNDUH HASIL AKHIR (JPEG 0.95 + flatten background putih)
+      // JPEG tidak mendukung alpha, jadi area transparan harus di-flatten ke putih
+      // terlebih dahulu supaya tidak jadi hitam.
+      const exportCanvas = document.createElement('canvas');
+      exportCanvas.width = canvas.width;
+      exportCanvas.height = canvas.height;
+      const exportCtx = exportCanvas.getContext('2d');
+      if (!exportCtx) throw new Error('Gagal membuat kanvas ekspor.');
+
+      exportCtx.fillStyle = '#ffffff';
+      exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      exportCtx.drawImage(canvas, 0, 0);
+
       const link = document.createElement('a');
-      link.download = `photostrip-gstudio-${Date.now()}.png`;
-      link.href = canvas.toDataURL('image/png', 1.0);
+      link.download = `photostrip-gstudio-${Date.now()}.jpg`;
+      link.href = exportCanvas.toDataURL('image/jpeg', 0.95);
       link.click();
 
     } catch (error) {
