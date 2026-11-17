@@ -2,31 +2,86 @@ name: Keep Supabase Alive
 
 on:
   schedule:
-    # Run every 4 days at 00:00 UTC (Supabase pauses after 7 days of inactivity)
-    - cron: '0 0 */4 * *'
+    # Daily at 03:17 UTC. Supabase pauses free-tier projects after 7 days without
+    # activity, so a daily ping leaves a 6-day margin for GitHub cron delays.
+    - cron: '17 3 * * *'
   workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+
+permissions:
+  contents: write # required for the monthly heartbeat commit
+
+concurrency:
+  group: keep-supabase-alive
+  cancel-in-progress: false
 
 jobs:
   ping-supabase:
+    name: Ping Supabase API
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Public, client-side-safe values (already shipped inside the Vite bundle).
+      # Override with repository secrets of the same name if the project moves.
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://jdpwcysfkjqvnjtmkmle.supabase.co' }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_wK2cSo99UvmR33frImBEeQ_qmCUiwv_' }}
     steps:
-      - name: Ping Supabase API
+      - uses: actions/checkout@v4
+
+      - name: Heartbeat commit (keeps scheduled workflows enabled)
+        continue-on-error: true
         run: |
-          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.SUPABASE_ANON_KEY }}" ]; then
-            echo "Error: SUPABASE_URL or SUPABASE_ANON_KEY secret is not set!"
+          set -euo pipefail
+          stamp=.github/keep-alive-stamp
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if [ -f "$stamp" ]; then
+            last=$(date -u -d "$(cat "$stamp")" +%s)
+            if [ $(( ($(date -u +%s) - last) / 86400 )) -lt 30 ]; then
+              echo "Heartbeat is fresh ($(cat "$stamp")); no commit needed."
+              exit 0
+            fi
+          fi
+          printf '%s\n' "$now" > "$stamp"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$stamp"
+          git commit -m "chore: keep-alive heartbeat ${now} [skip ci]"
+          git push
+
+      - name: Ping REST + Auth endpoints
+        run: |
+          set -euo pipefail
+          url="${SUPABASE_URL%/}"
+          key="$(printf '%s' "$SUPABASE_ANON_KEY" | tr -d '[:space:]')"
+
+          hit() { # hit <label> <path> <attempts>
+            local label="$1" path="$2" attempts="$3" code=""
+            for i in $(seq 1 "$attempts"); do
+              code="$(curl -sS -o /dev/null -w '%{http_code}' -m 30 \
+                "$url$path" \
+                -H "apikey: $key" \
+                -H "Authorization: Bearer $key" || true)"
+              echo "$label attempt $i -> ${code:-no-response}"
+              if [ "$code" = "200" ]; then
+                return 0
+              fi
+              sleep $((i * 15))
+            done
+            echo "::warning title=$label did not return 200::last status ${code:-no-response}"
+            return 1
+          }
+
+          # A real PostgREST query is the strongest "project is active" signal.
+          db_ok=0
+          auth_ok=0
+          hit "REST query (public.layouts)" "/rest/v1/layouts?select=*&limit=1" 3 && db_ok=1
+          # Auth health is schema-independent, so it keeps working after schema changes.
+          hit "Auth health" "/auth/v1/health" 2 && auth_ok=1
+
+          if [ "$db_ok" = 1 ] && [ "$auth_ok" = 1 ]; then
+            echo "Supabase is alive: database query and auth health both returned 200."
+          elif [ "$db_ok" = 1 ] || [ "$auth_ok" = 1 ]; then
+            echo "Supabase responded, but one endpoint did not return 200 — see warnings above."
+          else
+            echo "::error::Supabase did not return 200 on any endpoint."
             exit 1
           fi
-          
-          # Hitting the REST API and querying 1 item from the stickers table
-          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X GET "${{ secrets.SUPABASE_URL }}/rest/v1/stickers?select=name&limit=1" \
-            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
-          
-          echo "Supabase API responded with status code: $STATUS_CODE"
-          
-          if [ "$STATUS_CODE" -ne 200 ] && [ "$STATUS_CODE" -ne 204 ] && [ "$STATUS_CODE" -ne 206 ]; then
-            echo "Ping failed!"
-            exit 1
-          fi
-          echo "Ping successful, Supabase project is kept alive!"

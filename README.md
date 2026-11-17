@@ -113,7 +113,7 @@ The demo runs on Vercel. Camera access requires **HTTPS** (or `localhost`) — t
 - **About**, **Privacy Policy**, **Contact**, **Support**
 
 ### Engineering
-- **GitHub Actions keep-alive** workflow pings Supabase every 4 days so the free-tier project never pauses
+- **GitHub Actions keep-alive** workflow pings Supabase daily (REST query + auth health) so the free-tier project never pauses
 - Strict TypeScript configuration (`strict`, `noUnusedLocals`, `noUnusedParameters`)
 - ESLint 9 flat config with React Hooks and React Refresh plugins
 - Content-driven layouts, stickers, and papers fetched from Supabase and sorted server-side — adding assets requires **no code changes**
@@ -284,15 +284,29 @@ will fail with a *tainted canvas* error.
 
 ### Keep-alive workflow
 
-`.github/workflows/keep-alive.yml` pings the Supabase REST API every 4 days (Supabase pauses free projects after
-7 days of inactivity). Add these repository secrets under **Settings → Secrets and variables → Actions**:
+`.github/workflows/keep-alive.yml` runs **daily at 03:17 UTC** and hits two endpoints on the Supabase project:
+
+1. `GET /rest/v1/layouts?select=*&limit=1` — a real PostgREST query (database activity, the strongest signal).
+2. `GET /auth/v1/health` — schema-independent liveness check.
+
+Each endpoint is retried with backoff, so a transient 5xx does not fail the run. Supabase pauses free projects after
+7 days without activity, so a daily ping leaves a 6-day margin for GitHub cron delays.
+
+The workflow works out of the box: it falls back to the public project URL and publishable key that already ship
+inside the Vite bundle. To point it at a different project, set these repository secrets under
+**Settings → Secrets and variables → Actions** (they override the fallback):
 
 | Secret | Value |
 |---|---|
 | `SUPABASE_URL` | Your project URL |
-| `SUPABASE_ANON_KEY` | Your anon public key |
+| `SUPABASE_ANON_KEY` | Your publishable / anon public key |
 
 Trigger it manually from the **Actions** tab → *Keep Supabase Alive* → *Run workflow*.
+
+> **Why the heartbeat commit?** GitHub disables `schedule` triggers after 60 days without repository activity.
+> The workflow writes `.github/keep-alive-stamp` and commits it at most once every 30 days, which keeps the
+> schedule enabled even on a repo that is otherwise untouched. The commit is best-effort (`continue-on-error`),
+> so a protected branch never fails the keep-alive run.
 
 ---
 
