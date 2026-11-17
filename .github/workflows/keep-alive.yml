@@ -5,6 +5,9 @@ on:
     # Daily at 03:17 UTC. Supabase pauses free-tier projects after 7 days without
     # activity, so a daily ping leaves a 6-day margin for GitHub cron delays.
     - cron: '17 3 * * *'
+  push:
+    paths:
+      - .github/workflows/keep-alive.yml # run once whenever the ping itself changes
   workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
 
 permissions:
